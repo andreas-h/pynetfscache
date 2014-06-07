@@ -17,16 +17,17 @@ class FilesystemCache(object):
         else:
             self.temppath = temppath
         self.keep_tmp = keep_tmp
-        self.files = {}
+        self._files = {}
         self.sourcepath = sourcepath
+        self._check_init()
 
     def __del__(self):
-        if self.keep_tmp:
+        if not self.keep_tmp:
             shutil.rmtree(self.temppath)
 
     def __call__(self, path):
         # TODO: support path as glob
-        return self.files.get(path, self.retrieve(path))[0]
+        return self._files.get(path, self.retrieve(path))[0]
 
     def __enter__(self):
         return self
@@ -61,7 +62,8 @@ class FilesystemCache(object):
         the remote storage and returns the filename to local storage
 
         """
-        raise NotImplementedError("Method must be implemented in child class")
+        self._retrieve(path)
+        return self._files[path][0]
 
     def clean(self, pattern):
         """Selectively clean local storage
@@ -97,18 +99,22 @@ class LocalFilesystemCache(FilesystemCache):
 
     """
 
-    def __init__(self, sourcepath, temppath=None, keep_tmp=False):
-        FilesystemCache.__init__(self, sourcepath, temppath, keep_tmp)
+    def _check_init(self):
+        if not os.path.isdir(self.sourcepath):
+            raise ValueError("The given source path '{}' doesn't "
+                             "exist".format(self.sourcepath))
+        if not os.listdir(self.sourcepath):
+            raise ValueError("The given source path '{}' is "
+                             "empty".format(self.sourcepath))
 
-    def retrieve(self, path):
+    def _retrieve(self, path):
         temppath = self._construct_temppath(path)
         self._prepare_targetpath(path)
         shutil.copy2(self._construct_sourcepath(path), temppath)
-        self.files[path] = temppath, datetime.datetime.now()
-        return self.files[path]
+        self._files[path] = temppath, datetime.datetime.now()
 
-    #def glob(self, pathname):
-    #    return glob.glob(self._construct_sourcepath(pathname))
+    def glob(self, pathname):
+        return glob.glob(os.path.join(self.sourcepath, pathname))
 
     def isdir(self, dirname):
         return os.path.isdir(self._construct_sourcepath(dirname))
