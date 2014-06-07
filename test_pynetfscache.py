@@ -11,7 +11,7 @@ import time
 import unittest
 import warnings
 
-from fscache import LocalFilesystemCache
+from pynetfscache import LocalFilesystemCache
 
 
 def _touch(path, createdirs=False):
