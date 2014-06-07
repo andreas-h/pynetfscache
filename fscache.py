@@ -7,15 +7,22 @@ import glob
 import os
 import shutil
 import tempfile
+import warnings
 
 
 class FilesystemCache(object):
 
     def __init__(self, sourcepath, temppath=None, keep_tmp=False):
+        if temppath is not None and not keep_tmp:
+            warnings.warn("You specified the temppath '{}', but you also "
+                          "told me to remove the temppath when we're done. "
+                          "For security reasons, I assume you're wrong and I "
+                          "WILL NOT DELETE the temppath.".format(temppath))
         if temppath is None:
             self.temppath = tempfile.mkdtemp()
         else:
             self.temppath = temppath
+            keep_tmp = True
         self.keep_tmp = keep_tmp
         self._files = {}
         self.sourcepath = sourcepath
@@ -43,7 +50,7 @@ class FilesystemCache(object):
         return os.path.join(self.temppath, filename)
 
     def _construct_temptargetdir(self, path):
-        return os.path.join(self.temppath, os.path.split(path)[0])
+        return os.path.join(self.temppath, os.path.dirname(path))
 
     def _prepare_targetpath(self, path):
         targetdir = self._construct_temptargetdir(path)
@@ -62,24 +69,69 @@ class FilesystemCache(object):
         the remote storage and returns the filename to local storage
 
         """
-        self._retrieve(path)
-        return self._files[path][0]
+        if isinstance(path, basestring):
+            self._retrieve(path)
+            retval = self._files[path][0]
+        elif isinstance(path, list):
+            retval = []
+            for p in path:
+                self._retrieve(p)
+                retval.append(self._files[p][0])
+        else:
+            raise ValueError("You passed an object of class '{}' as "
+                             "path".format(path.__class__))
+        return retval
 
-    def clean(self, pattern):
+    def _retrieve_single(self, path):
+        pass
+
+    def clean(self, pattern=None, time=None):
         """Selectively clean local storage
 
-        This method selectively purges the local storage from all files whose
-        relative paths match *pattern*.
-
-        .. note:: Currently, this will only delete files, not directories
+        This method selectively purges the local storage from all
+        files whose relative paths match *pattern*, matching an
+        additional time constraint *time* (which can be either a
+        datetime.datetime or a datetime.timedelta object).
 
         """
-        raise NotImplementedError()
+        if pattern is None:
+            pattern = "*"
+        files_to_clean = glob.glob(os.path.join(self.temppath, pattern))
+
+        if isinstance(time, datetime.datetime):
+            t_constraint = lambda t: t < time
+        elif isinstance(time, datetime.timedelta):
+            t_constraint = lambda t: datetime.datetime.now() - t > time
+        else:
+            t_constraint = lambda t: False
+
+        def _remove_file(relpath, abspath):
+            os.remove(abspath)
+            self._files.pop(relpath)
+            if len(os.listdir(os.path.dirname(abspath))) == 0:
+                shutil.rmtree(os.path.dirname(abspath))
+
+        def _check_time_constraint(time, t):
+            return time is None or (t_constraint(t) and time is not None)
+
+        # iterate over local files and delete if necessary
+        for relpath, (abspath, t) in self._files.items():
+            if abspath in files_to_clean:
+                if _check_time_constraint(time, t):
+                    _remove_file(relpath, abspath)
+
+        # iterate over files_to_clean; if it's a directory, delete this
+        for f in files_to_clean:
+            if os.path.isdir(f):
+                for relpath, (abspath, t) in self._files.items():
+                    if abspath.startswith(f):
+                        if _check_time_constraint(time, t):
+                            _remove_file(relpath, abspath)
 
     def autoclean(self):
         pass
 
-    def glob(self, dirname):
+    def glob(self, pathname):
         raise NotImplementedError()
 
     def isdir(self, dirname):
@@ -88,7 +140,7 @@ class FilesystemCache(object):
     def isfile(self, filename):
         raise NotImplementedError()
 
-    def listdir(self, filename):
+    def listdir(self, dirname):
         raise NotImplementedError()
 
 

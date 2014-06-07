@@ -7,7 +7,9 @@ import datetime
 import os
 import shutil
 import tempfile
+import time
 import unittest
+import warnings
 
 from fscache import LocalFilesystemCache
 
@@ -41,6 +43,15 @@ class TestLocalFilesystemCache(unittest.TestCase):
         del c
         self.assertFalse(os.path.isdir(tmppath))
 
+    def test_init_warn_arguments(self):
+        # see http://stackoverflow.com/a/3892301 to assert warnings
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")  # always trigger all warnings
+            c = LocalFilesystemCache(self.remotebase, self.localbase)
+            self.assertTrue(str(w[-1].message).find("I WILL NOT DELETE") > -1)
+            self.assertTrue(issubclass(w[-1].category, UserWarning))
+        del c
+
     def test_donot_teardown(self):
         c = LocalFilesystemCache(self.remotebase, keep_tmp=True)
         tmppath = c.temppath
@@ -55,6 +66,22 @@ class TestLocalFilesystemCache(unittest.TestCase):
         lpath = c.retrieve("fileA")
         t1 = datetime.datetime.now()
         self.assertTrue(t0 < c._files["fileA"][1] < t1)
+        del c
+
+    def test_retrieve_file_list(self):
+        c = LocalFilesystemCache(self.remotebase)
+        tmppath = c.temppath
+        c.retrieve(["fileA", os.path.join("dirA", "fileA")])
+        self.assertTrue(os.path.isfile(c("fileA")))
+        self.assertTrue(os.path.isfile(c(os.path.join("dirA", "fileA"))))
+        del c
+
+    def test_retrieve_file_notfound(self):
+        c = LocalFilesystemCache(self.remotebase)
+        tmppath = c.temppath
+        with self.assertRaises(IOError) as cm:
+            c.retrieve("fileB")
+        self.assertEqual(cm.exception.errno, 2)
         del c
 
     def test_retrieve_file_call(self):
@@ -78,6 +105,54 @@ class TestLocalFilesystemCache(unittest.TestCase):
         lpath = c.retrieve(os.path.join("dirA", "fileA"))
         self.assertTrue(os.path.isfile(os.path.join(tmppath, "dirA", "fileA")))
         self.assertEqual(lpath, os.path.join(tmppath, "dirA", "fileA"))
+        del c
+
+    def test_clean_all(self):
+        c = LocalFilesystemCache(self.remotebase)
+        tmppath = c.temppath
+        c.retrieve(["fileA", os.path.join("dirA", "fileA")])
+        c.clean()
+        self.assertEqual(os.listdir(c.temppath), [])
+        self.assertEqual(c._files, {})
+        del c
+
+    def test_clean_pattern(self):
+        c = LocalFilesystemCache(self.remotebase)
+        tmppath = c.temppath
+        c.retrieve(["fileA", os.path.join("dirA", "fileA")])
+        c.clean("f*")
+        self.assertEqual(os.listdir(c.temppath), ["dirA"])
+        self.assertEqual(c._files.keys(), [os.path.join("dirA", "fileA")])
+        del c
+
+    def test_clean_datetime(self):
+        c = LocalFilesystemCache(self.remotebase)
+        tmppath = c.temppath
+        t0 = datetime.datetime.now()
+        c.retrieve("fileA")
+        time.sleep(0.5)
+        t1 = datetime.datetime.now()
+        c.retrieve(os.path.join("dirA", "fileA"))
+        time.sleep(0.5)
+        c.clean(time=t0 + datetime.timedelta(microseconds=100))
+        self.assertEqual(os.listdir(c.temppath), ["dirA"])
+        self.assertEqual(c._files.keys(), [os.path.join("dirA", "fileA")])
+        del c
+
+    def test_clean_timedelta(self):
+        c = LocalFilesystemCache(self.remotebase)
+        tmppath = c.temppath
+        t0 = datetime.datetime.now()
+        c.retrieve("fileA")
+        time.sleep(0.5)
+        t1 = datetime.datetime.now()
+        c.retrieve(os.path.join("dirA", "fileA"))
+        time.sleep(0.5)
+        timedelta = ((datetime.datetime.now() - t0) +
+                     datetime.timedelta(microseconds=10))
+        c.clean(time=timedelta)
+        self.assertEqual(os.listdir(c.temppath), ["dirA"])
+        self.assertEqual(c._files.keys(), [os.path.join("dirA", "fileA")])
         del c
 
     def test_glob(self):
@@ -117,7 +192,6 @@ class TestLocalFilesystemCache(unittest.TestCase):
         actual.sort(), required.sort()
         self.assertEqual(actual, required)
         del c
-
 
 
 if __name__ == '__main__':
